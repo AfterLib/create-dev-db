@@ -1,0 +1,171 @@
+How to create a development database
+
+1. Truncate the following tables:
+    TRUNCATE TABLE admin_action RESTART IDENTITY CASCADE;
+    TRUNCATE TABLE ads_in_collection RESTART IDENTITY CASCADE;
+    TRUNCATE TABLE collection_archive RESTART IDENTITY CASCADE;
+    TRUNCATE TABLE collection_page_snapshot RESTART IDENTITY CASCADE;
+    TRUNCATE TABLE page_total_ads_history RESTART IDENTITY CASCADE;
+    TRUNCATE TABLE page_unique_ads_history RESTART IDENTITY CASCADE;
+    TRUNCATE TABLE user_cancellation_feedback RESTART IDENTITY CASCADE;
+    TRUNCATE TABLE user_scheduled_mail RESTART IDENTITY CASCADE;
+    TRUNCATE TABLE user_page_column_item RESTART IDENTITY CASCADE;
+
+2. Mark all ads from collection_ad as deleted = true that are older than 3 weeks:
+    Use cleaner3.mjs (UPDATE collection_ad SET deleted = true WHERE created_at < NOW() - INTERVAL '3 weeks';)
+    Verify: SELECT count(*), deleted FROM collection_ad GROUP BY deleted;
+
+3. Follow "How to delete ads" instructions.
+    - Result should be that we only keep rows where ad_id or page_id still exists for
+        - collection_card
+        - collection_download
+        - collection_mov_ad
+        - collection_mov_reach
+        - user_fav_ad
+        - user_fav_page
+        - user_hide_ad
+        - user_hide_page
+    Steps:
+    - cleaner2.mjs
+    - Queries:
+        create index idx_deleted on collection_ad (deleted);
+        create index idx_deleted_dl on collection_download (deleted);
+        CREATE INDEX idx_user_credits_usage_page_id ON user_credits_usage(page_id);
+        CREATE INDEX idx_collection_ad_page_id ON collection_ad(page_id);
+        CREATE INDEX idx_collection_download_page_id ON collection_download(page_id);
+        CREATE INDEX idx_page_total_ads_history_page_id ON page_total_ads_history(page_id);
+        CREATE INDEX idx_user_fav_page_page_id ON user_fav_page(page_id);
+        CREATE INDEX idx_user_hide_page_page_id ON user_hide_page(page_id);
+        CREATE INDEX idx_user_credits_usage_ad_id ON user_credits_usage(ad_id);
+
+        UPDATE collection_download SET deleted = true WHERE ad_id IN (SELECT id FROM collection_ad WHERE deleted = true); (time: 1h)
+        UPDATE collection_download SET deleted = true WHERE page_id IN (SELECT page_id FROM collection_page WHERE deleted = true);
+        DELETE FROM collection_download WHERE deleted = true;
+
+        WITH rows_to_delete AS (
+                SELECT c.id
+                FROM collection_card c
+                WHERE c.ad_id IN (
+                    SELECT id
+                    FROM collection_ad
+                    WHERE deleted = TRUE
+                )
+                FOR UPDATE SKIP LOCKED
+            )
+            DELETE FROM collection_card WHERE id IN (SELECT id FROM rows_to_delete);
+        
+        WITH rows_to_delete AS (
+                SELECT c.id
+                FROM collection_mov_ad c
+                WHERE c.ad_id IN (
+                    SELECT id 
+                    FROM collection_ad 
+                    WHERE deleted = TRUE
+                )
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1000
+            )
+            DELETE FROM collection_mov_ad WHERE id IN (SELECT id FROM rows_to_delete);
+        
+        WITH rows_to_delete AS (
+                SELECT c.id
+                FROM collection_mov_reach c
+                WHERE c.ad_id IN (
+                    SELECT id 
+                    FROM collection_ad 
+                    WHERE deleted = TRUE
+                )
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1000
+            )
+            DELETE FROM collection_mov_reach WHERE id IN (SELECT id FROM rows_to_delete);
+
+        DELETE FROM user_credits_usage WHERE ad_id IN (SELECT id FROM collection_ad WHERE deleted = TRUE);
+        DELETE FROM user_credits_usage WHERE page_id IN (SELECT page_id FROM collection_page WHERE deleted = TRUE);
+       
+        WITH rows_to_delete AS (
+                SELECT c.id
+                FROM collection_page c
+                WHERE c.deleted = TRUE
+                FOR UPDATE SKIP LOCKED
+            )
+        DELETE FROM collection_page WHERE id IN (SELECT id FROM rows_to_delete);
+
+        WITH rows_to_delete AS (
+                SELECT id
+                FROM collection_ad
+                WHERE deleted = TRUE
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1000
+            )
+            DELETE FROM collection_ad
+            WHERE id IN (SELECT id FROM rows_to_delete);
+
+4. Delete all entries that:
+    DELETE FROM user_credits_usage WHERE created_at <= NOW() - INTERVAL '3 weeks';
+    DELETE FROM user_log_login WHERE logged_in_at <= NOW() - INTERVAL '3 weeks';
+    DELETE FROM user_log_verification WHERE created_at <= NOW() - INTERVAL '3 weeks';
+
+Delete temp indexes:
+    DROP index idx_deleted;
+    DROP index idx_deleted_dl;
+    DROP index idx_user_credits_usage_ad_id;
+    DROP INDEX idx_user_credits_usage_page_id;
+    DROP INDEX idx_collection_ad_page_id;
+    DROP INDEX idx_collection_download_page_id;
+    DROP INDEX idx_page_total_ads_history_page_id;
+    DROP INDEX idx_user_fav_page_page_id;
+    DROP INDEX idx_user_hide_page_page_id;
+
+5. Edit fields with the following UPDATES
+    UPDATE "user" SET created_at = NOW() - (random() * (interval '365 days'));
+    UPDATE "user" SET count_login = 0;
+    UPDATE "user" SET pw_reset_count = 0;
+    UPDATE "user" SET pwd = '';
+    UPDATE affiliate_details SET street_address_1 = '';
+    UPDATE affiliate_details SET street_address_2 = '';
+    UPDATE affiliate_details SET city = '';
+    UPDATE affiliate_details SET state = '';
+    UPDATE affiliate_details SET zip_code = '';
+
+    -- Update invitation.email
+    UPDATE invitation SET email = CONCAT('email', SUBSTRING(id::text, 1, 8), '@afterlib.com');
+
+    -- Update user.email and user.pwd_bcrypt
+    UPDATE "user"
+    SET 
+    email = CONCAT('email', id::text, '@afterlib.com'),
+    pwd_bcrypt = '$2b$12$6L8y9CQ6XUhVyz9JBxEXOOb0Vgc.xyD.vUrWpLKoQVk7SFuaqWitm';
+
+    -- Update affiliate_details.company_name and affiliate_details.company_website
+    UPDATE affiliate_details
+    SET 
+    company_name = CONCAT('company_name_', SUBSTRING(MD5(id::text), 1, 8)),
+    company_website = CONCAT('company_website_', SUBSTRING(MD5(id::text), 1, 8));
+
+6. Randomize fields with create-dev-db/create-dev-db.mjs
+    - collection_ad.headline
+    - collection_ad.link_description
+    - collection_ad.body
+    - collection_ad.duplicates --> random number between 1 and 10 or 0 if 0
+    - collection_ad.country
+    - collection_ad.date
+    
+    - collection_card.title
+    - collection_card.body
+    - collection_card.caption
+    - collection_card.link_url
+    - collection_card.link_description
+    
+    - collection_page.page_name
+    
+    - user.security_token
+    - user.security_token
+    - user.first_name
+    - user.last_name
+    - user.last_name
+    
+    - partner_link.link
+    - partner_link_click.link
+
+7. VACUUM FULL;

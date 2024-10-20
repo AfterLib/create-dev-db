@@ -1,0 +1,14 @@
+{
+	"printWidth": 140,
+	"tabWidth": 1,
+	"useTabs": true,
+	"semi": true,
+	"singleQuote": true,
+	"trailingComma": "all",
+	"bracketSpacing": false,
+	"jsxBracketSameLine": false,
+	"filePath": "./.prettierrc.json",
+	"requirePragma": false,
+	"insertPragma": false,
+	"tabSize": 4
+}
